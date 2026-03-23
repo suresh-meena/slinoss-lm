@@ -1,0 +1,10 @@
+eval:
+  zero_shot_tasks:
+    - lambada_openai
+    - hellaswag
+    - piqa
+    - arc_easy
+    - arc_challenge
+    - winogrande
+    - openbookqa
+  zero_shot_batch_size: auto

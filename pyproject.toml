@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slinoss-lm"
+version = "0.1.0"
+description = "Single-node SLinOSS language-model training harness for FineWeb-Edu."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ayan Das" }]
+dependencies = [
+  "numpy>=1.26,<3",
+  "packaging>=24,<26",
+  "PyYAML>=6,<7",
+  "safetensors>=0.5,<1",
+  "slinoss[cuda] @ https://github.com/b-vitamins/slinoss/releases/download/v0.1.1/slinoss-0.1.1-cp311-cp311-linux_x86_64.whl#sha256=d4695242e1b3805408870a7c7b48d7be404a45b7edbf81f599ceee5850d7a980",
+  "tokenizers>=0.22,<0.23",
+  "torch==2.10.0",
+  "tqdm>=4.66,<5",
+  "transformers>=4.57,<4.58",
+]
+
+[project.optional-dependencies]
+eval = [
+  "lm_eval[hf]>=0.4,<0.5",
+]
+dev = [
+  "pyright>=1.1.400",
+  "pytest>=8",
+  "ruff>=0.9.5",
+]
+
+[project.scripts]
+slinoss-lm-train = "slinoss_lm.train:main"
+slinoss-lm-inspect = "slinoss_lm.inspect:main"
+slinoss-lm-eval-ppl = "slinoss_lm.eval_ppl:main"
+slinoss-lm-eval-zero-shot = "slinoss_lm.eval_zero_shot:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+exclude = [
+  ".venv",
+  "__pycache__",
+]

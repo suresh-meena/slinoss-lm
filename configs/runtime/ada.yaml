@@ -1,0 +1,14 @@
+runtime:
+  per_device_batch_size: 32
+  grad_accum_steps: 4
+  dataloader_workers: 12
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+
+train:
+  compile: false
+  allow_tf32: true
+
+validation:
+  batch_size: 16

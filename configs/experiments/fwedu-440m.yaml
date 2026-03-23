@@ -1,0 +1,79 @@
+name: fwedu-440m
+
+model:
+  vocab_size: 128256
+  hidden_size: 768
+  intermediate_size: 2560
+  num_hidden_layers: 18
+  d_state: 128
+  expand: 2
+  d_head: 64
+  d_conv: 4
+  chunk_size: 64
+  rms_norm_eps: 1.0e-5
+  initializer_range: 0.02
+  tie_word_embeddings: true
+  gradient_checkpointing: false
+
+data:
+  root: null
+  root_env: FWEDU_DATA_ROOT
+  dataset_dir: data/fwedu-llama31-2k
+  seq_len: 2048
+  tokenizer_name: meta-llama/Llama-3.1-8B
+  tokenizer_path: null
+
+optim:
+  peak_lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_tokens: 1000000000
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.0e-8
+  grad_clip_norm: 1.0
+
+train:
+  seed: 1337
+  target_tokens: 100000000000
+  precision: bf16
+  allow_tf32: true
+  compile: false
+  compile_mode: max-autotune-no-cudagraphs
+
+runtime:
+  per_device_batch_size: 32
+  grad_accum_steps: 4
+  dataloader_workers: 12
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+
+checkpoint:
+  run_root: runs
+  save_every_steps: 5000
+  keep_last: 3
+  save_on_signal: true
+
+logging:
+  log_every_steps: 10
+
+validation:
+  enabled: false
+  dataset_root: null
+  dataset_dir: null
+  start_sequence: 0
+  num_sequences: 0
+  batch_size: 16
+  every_steps: 0
+
+eval:
+  zero_shot_tasks:
+    - lambada_openai
+    - hellaswag
+    - piqa
+    - arc_easy
+    - arc_challenge
+    - winogrande
+    - openbookqa
+  zero_shot_batch_size: auto
