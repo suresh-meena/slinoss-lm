@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+MANIFEST=$ROOT/scripts/manifest.scm
+
+if [ "$#" -eq 0 ]; then
+  echo "usage: ./scripts/guix-run <command> [args...]" >&2
+  exit 2
+fi
+
+exec guix shell -m "$MANIFEST" -- "$@"

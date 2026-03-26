@@ -12,6 +12,8 @@ venv/
 .env
 .env.local
 .env.*.local
+.remote-known-hosts
+remote-downloads/
 .DS_Store
 Thumbs.db
 .idea/
@@ -27,4 +29,3 @@ tmp/
 temp/
 *.log
 *.tmp
-
