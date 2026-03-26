@@ -99,7 +99,14 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-This installs the published `slinoss` `v0.1.1` wheel, not a sibling editable checkout.
+This installs the base harness plus the local dev tools used by the repo. The published `slinoss` `v0.1.1` wheel is used, not a sibling editable checkout.
+
+For zero-shot evaluation, install the optional eval stack in the same `.venv`:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-eval.txt
+```
 
 ## Inspect Before Launching
 

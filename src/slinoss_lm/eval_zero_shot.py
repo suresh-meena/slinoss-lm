@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -66,6 +67,11 @@ def _mean_accuracy(results: dict[str, object], tasks: list[str]) -> float | None
 
 def main() -> None:
     args = build_parser().parse_args()
+    if importlib.util.find_spec("lm_eval") is None:
+        raise RuntimeError(
+            "Zero-shot evaluation requires the optional eval dependencies. "
+            "Install them with `pip install -r requirements-eval.txt`."
+        )
     config = load_config(args.config, args.overrides)
     checkpoint_path = Path(args.checkpoint).resolve()
     checkpoint_dir = checkpoint_path.parent

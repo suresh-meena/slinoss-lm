@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 eval = [
   "lm_eval[hf]>=0.4,<0.5",
+  "pyarrow>=21,<23",
 ]
 dev = [
   "pyright>=1.1.400",
