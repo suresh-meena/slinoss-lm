@@ -1,13 +1,13 @@
 # SLinOSS LM
 
-`slinoss-lm` is the single-node training and evaluation harness for SLinOSS language-model runs on the packed FineWeb-Edu corpus produced by the companion `fineweb` workspace.
+`slinoss-lm` is a single-node training and evaluation harness for SLinOSS language-model runs on packed FineWeb-Edu data.
 
-This repo is intentionally built for the exact setup you described:
+The repo is intentionally narrow:
 
-- bare-metal Linux boxes
-- `torchrun` on one node with two GPUs
-- no Slurm, no ZeRO, no FSDP
-- prepacked `int32` FineWeb-Edu rows already transferred as `fwedu-data`
+- plain `torchrun` single-node training
+- no Slurm, ZeRO, FSDP, or cluster scheduler integration
+- prepacked `int32` token rows, not raw parquet or on-the-fly tokenization
+- local or user-managed runtime overlays, not machine-specific configs checked into git
 
 ## Design Choices
 
@@ -15,9 +15,9 @@ The harness uses plain PyTorch DDP, not FSDP or ZeRO.
 
 That is deliberate:
 
-- the target runs are modest enough for full-replica training on `2x RTX 3090 24GB` and `2x RTX A6000 48GB`
 - DDP is simpler to debug, more stable under interruptions, and easier to checkpoint and resume cleanly
 - the main bottlenecks at these scales are throughput and operational reliability, not parameter sharding
+- hardware selection and runtime tuning are intentionally left to local overlays instead of being baked into the repo
 
 The data loader is fixed-order and deterministic:
 
@@ -35,7 +35,7 @@ The checkpointing story is also conservative:
 
 ## Dataset Contract
 
-The training machines are expected to have the transferred `fwedu-data` package in place.
+The training environment is expected to have the transferred `fwedu-data` package in place.
 
 Set:
 
@@ -53,10 +53,12 @@ This path is the exact output of the `fineweb` transfer workflow.
 
 ## Experiments Shipped Here
 
-Two parameter-matched SLinOSS runs are configured:
+Four parameter-matched SLinOSS runs are configured:
 
 - `fwedu-180m`: `14` layers, `d_model=512`, `intermediate_size=1536`
 - `fwedu-440m`: `18` layers, `d_model=768`, `intermediate_size=2560`
+- `fwedu-880m`: `22` layers, `d_model=1024`, `intermediate_size=3328`
+- `fwedu-1p5b`: `26` layers, `d_model=1280`, `intermediate_size=3840`
 
 Shared mixer defaults:
 
@@ -92,14 +94,13 @@ Those values are fixed per scale and should be held constant across architecture
 Use Python `3.11`.
 
 ```bash
-cd /home/b/projects/slinoss-lm
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-This installs the base harness plus the local dev tools used by the repo. The published `slinoss` `v0.1.1` wheel is used, not a sibling editable checkout.
+This installs the base harness plus the local dev tools used by the repo. The published `slinoss` wheel declared in `pyproject.toml` is used, not a sibling editable checkout.
 
 For zero-shot evaluation, install the optional eval stack in the same `.venv`:
 
@@ -112,35 +113,26 @@ pip install -r requirements-eval.txt
 
 Use the inspector to verify the resolved config, parameter count, and batch geometry.
 
+Pass `--world-size` when you want the reported batch geometry to match a planned DDP launch.
+
 ```bash
 source .venv/bin/activate
-python3 -m slinoss_lm.inspect --config configs/experiments/fwedu-180m.yaml --config configs/runtime/ampere.yaml
-python3 -m slinoss_lm.inspect --config configs/experiments/fwedu-440m.yaml --config configs/runtime/ada.yaml
+python3 -m slinoss_lm.inspect --world-size 2 --config configs/experiments/fwedu-180m.yaml
+python3 -m slinoss_lm.inspect --world-size 2 --config configs/experiments/fwedu-880m.yaml
 ```
 
 ## Launch Commands
 
-Ampere / `2x RTX 3090` / `~180M`:
+Example:
 
 ```bash
-cd /home/b/projects/slinoss-lm
 source .venv/bin/activate
-export FWEDU_DATA_ROOT=/data/ayand/fwedu-data
+export FWEDU_DATA_ROOT=/path/to/fwedu-data
 torchrun --standalone --nproc-per-node=2 train.py \
-  --config configs/experiments/fwedu-180m.yaml \
-  --config configs/runtime/ampere.yaml
+  --config configs/experiments/fwedu-180m.yaml
 ```
 
-Ada / `2x RTX A6000` / `~440M`:
-
-```bash
-cd /home/b/projects/slinoss-lm
-source .venv/bin/activate
-export FWEDU_DATA_ROOT=/data/home/ayand/fwedu-data
-torchrun --standalone --nproc-per-node=2 train.py \
-  --config configs/experiments/fwedu-440m.yaml \
-  --config configs/runtime/ada.yaml
-```
+If you need host-specific batch geometry, keep that in an untracked local config and pass it as an additional `--config`.
 
 ## Outputs
 
@@ -193,7 +185,6 @@ source .venv/bin/activate
 export LLAMA31_TOKENIZER=/path/to/local/llama31-tokenizer
 python3 eval_zero_shot.py \
   --config configs/experiments/fwedu-180m.yaml \
-  --config configs/runtime/ampere.yaml \
   --checkpoint runs/fwedu-180m/checkpoints/step-000190000/trainer.pt
 ```
 
@@ -212,7 +203,6 @@ Example:
 source .venv/bin/activate
 python3 eval_ppl.py \
   --config configs/experiments/fwedu-180m.yaml \
-  --config configs/runtime/ampere.yaml \
   --checkpoint runs/fwedu-180m/checkpoints/step-000190000/trainer.pt \
   --dataset-root /path/to/packed-eval-root \
   --batch-size 8
@@ -239,6 +229,5 @@ This repo does not assume:
 It assumes only:
 
 - the transferred packed `fwedu-data` bundle
-- two local GPUs
 - Python `3.11`
 - `torchrun`

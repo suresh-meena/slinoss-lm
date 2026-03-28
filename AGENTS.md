@@ -55,8 +55,7 @@ Do not commit while any of these are failing.
   - `./scripts/remote-rsync --machine <name>`
   - `./scripts/remote-smoke --machine <name>`
 - The scripts use a repo-local `.remote-known-hosts` file for non-interactive
-  access. Manual aliases like `ssh ampere` or `ssh volta` are managed through
-  the user's `~/.ssh/config`.
+  access. Any manual SSH aliases are managed through the user's `~/.ssh/config`.
 - Standard remote workflow:
   1. run `./scripts/remote-smoke --machine <name>`
   2. sync the repo with `./scripts/remote-rsync --machine <name>`

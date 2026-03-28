@@ -19,10 +19,7 @@ def test_real_dataset_contract_is_loadable() -> None:
     if not (dataset_root / "meta.json").exists():
         pytest.skip(f"Packed dataset metadata not found at {dataset_root}.")
     config = load_config(
-        [
-            str(repo_root / "configs/experiments/fwedu-180m.yaml"),
-            str(repo_root / "configs/runtime/ampere.yaml"),
-        ],
+        [str(repo_root / "configs/experiments/fwedu-180m.yaml")],
         overrides=[f"data.root={str(Path(data_root).expanduser())!r}"],
     )
     meta = load_packed_meta(config.data)
