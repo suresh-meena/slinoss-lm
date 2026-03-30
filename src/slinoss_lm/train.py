@@ -7,7 +7,7 @@ import os
 import signal
 import time
 from pathlib import Path
-from typing import cast
+from typing import Mapping, cast
 
 import torch
 import torch.distributed as dist
@@ -46,6 +46,7 @@ from .data import (
     load_packed_meta,
 )
 from .modeling_slinoss_lm import SLinOSSCausalLM
+from .wandb_integration import WandbLogger, build_wandb_logger
 
 
 STOP_REQUESTED = False
@@ -197,7 +198,7 @@ def save_full_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler: CosineSchedule,
-    state: dict[str, int | float],
+    state: Mapping[str, int | float],
     keep_last: int,
 ) -> Path:
     payload = {
@@ -223,258 +224,303 @@ def main() -> None:
     global STOP_REQUESTED
     args = build_parser().parse_args()
     config = load_config(args.config, args.overrides)
+    wandb_logger: WandbLogger | None = None
+    exit_code = 1
 
-    rank, local_rank, world_size = init_distributed()
-    device = (
-        torch.device("cuda", local_rank)
-        if torch.cuda.is_available()
-        else torch.device("cpu")
-    )
-
-    if config.train.allow_tf32:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.set_float32_matmul_precision("high")
-
-    run_dir = Path(config.checkpoint.run_root) / config.name
-    logger = init_logging(run_dir / "train.log")
-
-    if is_main_process():
-        ensure_dir(run_dir)
-        atomic_write_json(run_dir / "system-info.json", collect_system_info())
-        atomic_write_text(
-            run_dir / "resolved-config.yaml",
-            yaml.safe_dump(config_to_dict(config), sort_keys=False),
+    try:
+        rank, local_rank, world_size = init_distributed()
+        device = (
+            torch.device("cuda", local_rank)
+            if torch.cuda.is_available()
+            else torch.device("cpu")
         )
 
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
+        if config.train.allow_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
 
-    set_seed(config.train.seed + rank)
+        run_dir = Path(config.checkpoint.run_root) / config.name
+        logger = init_logging(run_dir / "train.log")
 
-    meta = load_packed_meta(config.data)
-    global_batch_tokens = tokens_per_step(
-        seq_len=meta.seq_len,
-        per_device_batch_size=config.runtime.per_device_batch_size,
-        grad_accum_steps=config.runtime.grad_accum_steps,
-        world_size=world_size,
-    )
+        if is_main_process():
+            ensure_dir(run_dir)
+            atomic_write_json(run_dir / "system-info.json", collect_system_info())
+            atomic_write_text(
+                run_dir / "resolved-config.yaml",
+                yaml.safe_dump(config_to_dict(config), sort_keys=False),
+            )
 
-    hf_config = SLinOSSLMConfig(**config.model.__dict__)
-    base_model = SLinOSSCausalLM(hf_config)
-    base_model.gradient_checkpointing = bool(config.model.gradient_checkpointing)
-    if device.type == "cuda":
-        torch.nn.Module.cuda(base_model, device.index or 0)
-    else:
-        torch.nn.Module.cpu(base_model)
-    raw_model = maybe_compile(base_model, config)
-    model: torch.nn.Module = raw_model
-    if world_size > 1:
-        model = DDP(
-            raw_model,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            gradient_as_bucket_view=True,
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+
+        set_seed(config.train.seed + rank)
+
+        meta = load_packed_meta(config.data)
+        global_batch_tokens = tokens_per_step(
+            seq_len=meta.seq_len,
+            per_device_batch_size=config.runtime.per_device_batch_size,
+            grad_accum_steps=config.runtime.grad_accum_steps,
+            world_size=world_size,
         )
 
-    optimizer = build_optimizer(base_model, config)
-    scheduler = CosineSchedule(config, global_batch_tokens)
+        hf_config = SLinOSSLMConfig(**config.model.__dict__)
+        base_model = SLinOSSCausalLM(hf_config)
+        base_model.gradient_checkpointing = bool(config.model.gradient_checkpointing)
+        if device.type == "cuda":
+            torch.nn.Module.cuda(base_model, device.index or 0)
+        else:
+            torch.nn.Module.cpu(base_model)
+        raw_model = maybe_compile(base_model, config)
+        model: torch.nn.Module = raw_model
+        if world_size > 1:
+            model = DDP(
+                raw_model,
+                device_ids=[local_rank],
+                output_device=local_rank,
+                gradient_as_bucket_view=True,
+            )
 
-    step = 0
-    tokens_consumed = 0
-    sequences_consumed = 0
-    latest = None if args.resume == "never" else find_latest_checkpoint(run_dir)
-    if latest is not None and latest.exists():
-        payload = load_checkpoint(latest, map_location="cpu")
-        base_model.load_state_dict(payload["model"])
-        optimizer.load_state_dict(payload["optimizer"])
-        optimizer_to_device(optimizer, device)
-        scheduler.load_state_dict(payload["scheduler"])
-        state = payload["state"]
-        step = int(state["step"])
-        tokens_consumed = int(state["tokens_consumed"])
-        sequences_consumed = int(state["sequences_consumed"])
-        restore_rng_state(payload["rng"])
-        logger.info(
-            "Resumed from %s at step=%s tokens=%s sequences=%s",
-            latest,
-            format_int(step),
-            format_int(tokens_consumed),
-            format_int(sequences_consumed),
+        optimizer = build_optimizer(base_model, config)
+        scheduler = CosineSchedule(config, global_batch_tokens)
+
+        step = 0
+        tokens_consumed = 0
+        sequences_consumed = 0
+        latest = None if args.resume == "never" else find_latest_checkpoint(run_dir)
+        if latest is not None and latest.exists():
+            payload = load_checkpoint(latest, map_location="cpu")
+            base_model.load_state_dict(payload["model"])
+            optimizer.load_state_dict(payload["optimizer"])
+            optimizer_to_device(optimizer, device)
+            scheduler.load_state_dict(payload["scheduler"])
+            state = payload["state"]
+            step = int(state["step"])
+            tokens_consumed = int(state["tokens_consumed"])
+            sequences_consumed = int(state["sequences_consumed"])
+            restore_rng_state(payload["rng"])
+            logger.info(
+                "Resumed from %s at step=%s tokens=%s sequences=%s",
+                latest,
+                format_int(step),
+                format_int(tokens_consumed),
+                format_int(sequences_consumed),
+            )
+
+        if is_main_process():
+            wandb_logger = build_wandb_logger(
+                config=config,
+                run_dir=run_dir,
+                allow_resume=args.resume != "never",
+                run_metadata={
+                    "parameter_count": count_parameters(base_model),
+                    "world_size": world_size,
+                    "global_batch_tokens": global_batch_tokens,
+                    "dataset_root": str(meta.root),
+                    "dataset_sequences": meta.n_sequences,
+                    "dataset_tokens": meta.n_tokens,
+                    "tokenizer_id": meta.tokenizer_id,
+                    "resume_checkpoint": str(latest) if latest is not None else None,
+                },
+            )
+
+        loader = build_train_loader(
+            meta=meta,
+            runtime=config.runtime,
+            rank=rank,
+            world_size=world_size,
+            start_sequence=sequences_consumed,
         )
+        iterator = iter(CudaPrefetcher(loader, device))
 
-    loader = build_train_loader(
-        meta=meta,
-        runtime=config.runtime,
-        rank=rank,
-        world_size=world_size,
-        start_sequence=sequences_consumed,
-    )
-    iterator = iter(CudaPrefetcher(loader, device))
+        if is_main_process():
+            logger.info(
+                "Run %s starting on %s GPU(s), params=%s, dataset=%s, batch_tokens=%s",
+                config.name,
+                world_size,
+                format_int(count_parameters(base_model)),
+                meta.root,
+                format_int(global_batch_tokens),
+            )
 
-    if is_main_process():
-        logger.info(
-            "Run %s starting on %s GPU(s), params=%s, dataset=%s, batch_tokens=%s",
-            config.name,
-            world_size,
-            format_int(count_parameters(base_model)),
-            meta.root,
-            format_int(global_batch_tokens),
-        )
+        start_time = time.perf_counter()
+        last_log_time = start_time
+        running_loss = 0.0
+        running_steps = 0
 
-    start_time = time.perf_counter()
-    last_log_time = start_time
-    running_loss = 0.0
-    running_steps = 0
-
-    base_model.train()
-    optimizer.zero_grad(set_to_none=True)
-
-    while tokens_consumed < config.train.target_tokens:
-        micro_losses: list[float] = []
-        for micro_step in range(config.runtime.grad_accum_steps):
-            try:
-                batch = next(iterator)
-            except StopIteration:
-                logger.info(
-                    "Reached end of dataset after %s tokens.",
-                    format_int(tokens_consumed),
-                )
-                tokens_consumed = config.train.target_tokens
-                break
-
-            sync_context: AbstractContextManager[object]
-            if world_size > 1 and micro_step < config.runtime.grad_accum_steps - 1:
-                sync_context = cast(DDP, model).no_sync()
-            else:
-                sync_context = nullcontext()
-            with sync_context:
-                with torch.autocast(
-                    device_type=device.type,
-                    dtype=torch.bfloat16
-                    if config.train.precision == "bf16"
-                    else torch.float16,
-                    enabled=device.type == "cuda",
-                ):
-                    outputs = model(**batch)
-                    loss = outputs.loss
-                    assert loss is not None
-                    scaled_loss = loss / config.runtime.grad_accum_steps
-                scaled_loss.backward()
-                micro_losses.append(float(loss.detach()))
-
-        if not micro_losses:
-            break
-
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            base_model.parameters(),
-            config.optim.grad_clip_norm,
-        )
-        lr = scheduler.step(optimizer, step)
-        optimizer.step()
+        base_model.train()
         optimizer.zero_grad(set_to_none=True)
 
-        step += 1
-        sequences_consumed += (
-            config.runtime.per_device_batch_size
-            * world_size
-            * config.runtime.grad_accum_steps
-        )
-        tokens_consumed += global_batch_tokens
-        running_loss += sum(micro_losses) / len(micro_losses)
-        running_steps += 1
+        while tokens_consumed < config.train.target_tokens:
+            micro_losses: list[float] = []
+            for micro_step in range(config.runtime.grad_accum_steps):
+                try:
+                    batch = next(iterator)
+                except StopIteration:
+                    logger.info(
+                        "Reached end of dataset after %s tokens.",
+                        format_int(tokens_consumed),
+                    )
+                    tokens_consumed = config.train.target_tokens
+                    break
 
-        if step % config.logging.log_every_steps == 0:
-            now = time.perf_counter()
-            elapsed = now - last_log_time
-            steps = max(running_steps, 1)
-            toks_per_sec = (global_batch_tokens * steps) / max(elapsed, 1e-6)
-            avg_loss = running_loss / steps
-            if is_main_process():
-                payload = {
-                    "step": step,
-                    "tokens_consumed": tokens_consumed,
-                    "sequences_consumed": sequences_consumed,
-                    "loss": avg_loss,
-                    "lr": lr,
-                    "grad_norm": float(grad_norm),
-                    "tokens_per_second": toks_per_sec,
-                    "elapsed_seconds": time.perf_counter() - start_time,
-                }
-                append_jsonl(run_dir / "metrics.jsonl", payload)
-                atomic_write_json(run_dir / "run-state.json", payload)
-                logger.info(
-                    "step=%s loss=%.4f lr=%.3e grad_norm=%.3f tokens=%s toks/s=%.1f",
-                    format_int(step),
-                    avg_loss,
-                    lr,
-                    float(grad_norm),
-                    format_int(tokens_consumed),
-                    toks_per_sec,
-                )
-            running_loss = 0.0
-            running_steps = 0
-            last_log_time = now
+                sync_context: AbstractContextManager[object]
+                if world_size > 1 and micro_step < config.runtime.grad_accum_steps - 1:
+                    sync_context = cast(DDP, model).no_sync()
+                else:
+                    sync_context = nullcontext()
+                with sync_context:
+                    with torch.autocast(
+                        device_type=device.type,
+                        dtype=torch.bfloat16
+                        if config.train.precision == "bf16"
+                        else torch.float16,
+                        enabled=device.type == "cuda",
+                    ):
+                        outputs = model(**batch)
+                        loss = outputs.loss
+                        assert loss is not None
+                        scaled_loss = loss / config.runtime.grad_accum_steps
+                    scaled_loss.backward()
+                    micro_losses.append(float(loss.detach()))
 
-        should_validate = (
-            config.validation.enabled
-            and config.validation.every_steps > 0
-            and step % config.validation.every_steps == 0
-        )
-        if should_validate and is_main_process():
-            metrics = run_validation(base_model, config=config, device=device)
-            if metrics is not None:
-                append_jsonl(
-                    run_dir / "metrics.jsonl", {"step": step, "validation": metrics}
-                )
-                logger.info(
-                    "validation step=%s loss=%.4f ppl=%.3f",
-                    step,
-                    metrics["loss"],
-                    metrics["ppl"],
-                )
+            if not micro_losses:
+                break
 
-        should_save = step % config.checkpoint.save_every_steps == 0
-        if STOP_REQUESTED and config.checkpoint.save_on_signal:
-            should_save = True
-        if should_save:
-            barrier()
-            if is_main_process():
-                save_full_checkpoint(
-                    run_dir=run_dir,
-                    step=step,
-                    model=base_model,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    state={
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                base_model.parameters(),
+                config.optim.grad_clip_norm,
+            )
+            lr = scheduler.step(optimizer, step)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+
+            step += 1
+            sequences_consumed += (
+                config.runtime.per_device_batch_size
+                * world_size
+                * config.runtime.grad_accum_steps
+            )
+            tokens_consumed += global_batch_tokens
+            running_loss += sum(micro_losses) / len(micro_losses)
+            running_steps += 1
+
+            if step % config.logging.log_every_steps == 0:
+                now = time.perf_counter()
+                elapsed = now - last_log_time
+                steps = max(running_steps, 1)
+                toks_per_sec = (global_batch_tokens * steps) / max(elapsed, 1e-6)
+                avg_loss = running_loss / steps
+                if is_main_process():
+                    payload = {
                         "step": step,
                         "tokens_consumed": tokens_consumed,
                         "sequences_consumed": sequences_consumed,
-                    },
-                    keep_last=config.checkpoint.keep_last,
-                )
-                logger.info("Saved checkpoint at step=%s", format_int(step))
-            barrier()
+                        "loss": avg_loss,
+                        "lr": lr,
+                        "grad_norm": float(grad_norm),
+                        "tokens_per_second": toks_per_sec,
+                        "elapsed_seconds": time.perf_counter() - start_time,
+                    }
+                    append_jsonl(run_dir / "metrics.jsonl", payload)
+                    atomic_write_json(run_dir / "run-state.json", payload)
+                    if wandb_logger is not None:
+                        wandb_logger.log_training(payload)
+                    logger.info(
+                        "step=%s loss=%.4f lr=%.3e grad_norm=%.3f tokens=%s toks/s=%.1f",
+                        format_int(step),
+                        avg_loss,
+                        lr,
+                        float(grad_norm),
+                        format_int(tokens_consumed),
+                        toks_per_sec,
+                    )
+                running_loss = 0.0
+                running_steps = 0
+                last_log_time = now
 
-        if STOP_REQUESTED:
-            if is_main_process():
-                logger.warning(
-                    "Stop requested; exiting after checkpoint-safe step boundary."
-                )
-            break
+            should_validate = (
+                config.validation.enabled
+                and config.validation.every_steps > 0
+                and step % config.validation.every_steps == 0
+            )
+            if should_validate and is_main_process():
+                metrics = run_validation(base_model, config=config, device=device)
+                if metrics is not None:
+                    append_jsonl(
+                        run_dir / "metrics.jsonl", {"step": step, "validation": metrics}
+                    )
+                    if wandb_logger is not None:
+                        wandb_logger.log_validation(step=step, metrics=metrics)
+                    logger.info(
+                        "validation step=%s loss=%.4f ppl=%.3f",
+                        step,
+                        metrics["loss"],
+                        metrics["ppl"],
+                    )
 
-    barrier()
-    if is_main_process():
-        elapsed = time.perf_counter() - start_time
-        logger.info(
-            "Finished run=%s step=%s tokens=%s elapsed=%s",
-            config.name,
-            format_int(step),
-            format_int(tokens_consumed),
-            format_duration(elapsed),
-        )
-    if is_dist_initialized():
-        dist.destroy_process_group()
+            should_save = step % config.checkpoint.save_every_steps == 0
+            if STOP_REQUESTED and config.checkpoint.save_on_signal:
+                should_save = True
+            if should_save:
+                barrier()
+                if is_main_process():
+                    state = {
+                        "step": step,
+                        "tokens_consumed": tokens_consumed,
+                        "sequences_consumed": sequences_consumed,
+                    }
+                    checkpoint_dir = save_full_checkpoint(
+                        run_dir=run_dir,
+                        step=step,
+                        model=base_model,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        state=state,
+                        keep_last=config.checkpoint.keep_last,
+                    )
+                    if wandb_logger is not None:
+                        wandb_logger.log_checkpoint(
+                            step=step,
+                            checkpoint_dir=checkpoint_dir,
+                            state=state,
+                        )
+                    logger.info("Saved checkpoint at step=%s", format_int(step))
+                barrier()
+
+            if STOP_REQUESTED:
+                if is_main_process():
+                    logger.warning(
+                        "Stop requested; exiting after checkpoint-safe step boundary."
+                    )
+                break
+
+        barrier()
+        if is_main_process():
+            elapsed = time.perf_counter() - start_time
+            if wandb_logger is not None:
+                wandb_logger.update_summary(
+                    {
+                        "final_step": step,
+                        "final_tokens_consumed": tokens_consumed,
+                        "final_sequences_consumed": sequences_consumed,
+                        "elapsed_seconds": elapsed,
+                        "stop_requested": STOP_REQUESTED,
+                    }
+                )
+            logger.info(
+                "Finished run=%s step=%s tokens=%s elapsed=%s",
+                config.name,
+                format_int(step),
+                format_int(tokens_consumed),
+                format_duration(elapsed),
+            )
+        exit_code = 0
+    finally:
+        if is_main_process() and wandb_logger is not None:
+            wandb_logger.finish(exit_code=exit_code)
+        if is_dist_initialized():
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":

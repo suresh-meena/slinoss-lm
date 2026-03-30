@@ -27,6 +27,9 @@ eval = [
   "lm_eval[hf]>=0.4,<0.5",
   "pyarrow>=21,<23",
 ]
+wandb = [
+  "wandb>=0.18,<1",
+]
 dev = [
   "pyright>=1.1.400",
   "pytest>=8",

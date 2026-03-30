@@ -80,6 +80,23 @@ class LoggingConfig:
 
 
 @dataclass
+class WandbConfig:
+    enabled: bool = False
+    project: str | None = None
+    entity: str | None = None
+    run_name: str | None = None
+    run_id: str | None = None
+    group: str | None = None
+    job_type: str = "train"
+    tags: list[str] = field(default_factory=list)
+    notes: str | None = None
+    mode: str | None = None
+    dir: str | None = None
+    resume: str = "allow"
+    upload_checkpoints: bool = False
+
+
+@dataclass
 class ValidationConfig:
     enabled: bool = False
     dataset_root: str | None = None
@@ -116,6 +133,7 @@ class ExperimentConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
 
@@ -166,6 +184,7 @@ def load_config(
         runtime=RuntimeConfig(**merged["runtime"]),
         checkpoint=CheckpointConfig(**merged["checkpoint"]),
         logging=LoggingConfig(**merged["logging"]),
+        wandb=WandbConfig(**merged["wandb"]),
         validation=ValidationConfig(**merged["validation"]),
         eval=EvalConfig(**merged["eval"]),
     )

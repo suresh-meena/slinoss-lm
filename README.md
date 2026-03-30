@@ -109,6 +109,13 @@ source .venv/bin/activate
 pip install -r requirements-eval.txt
 ```
 
+For W&B logging, install the optional tracker dependency in the same `.venv`:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-wandb.txt
+```
+
 ## Inspect Before Launching
 
 Use the inspector to verify the resolved config, parameter count, and batch geometry.
@@ -149,6 +156,12 @@ runs/<run-name>/
 ├── resolved-config.yaml
 ├── run-state.json
 └── system-info.json
+```
+
+When W&B is enabled, the run directory also contains:
+
+```text
+runs/<run-name>/wandb-run.json
 ```
 
 `trainer.pt` contains:
@@ -215,6 +228,35 @@ python3 eval_ppl.py \
 - Do not change world size, microbatch size, or gradient-accumulation settings mid-run unless you are intentionally starting a new run.
 - This repo saves full-state checkpoints, so disaster recovery is straightforward but storage use is real. Keep an eye on disk.
 - `torch.compile` is disabled by default because the primary goal here is reliable paper-grade runs. You can enable it in a runtime config once a scale has proven stable.
+
+## W&B
+
+W&B support is optional and machine-independent:
+
+- it is controlled by the `wandb` config section
+- only rank `0` logs in DDP
+- local `metrics.jsonl` and `run-state.json` remain the source-of-truth fallback
+- authentication is handled through standard W&B environment variables such as `WANDB_API_KEY`
+- online and offline modes are both supported through `wandb.mode`
+
+Example config fragment:
+
+```yaml
+wandb:
+  enabled: true
+  project: slinoss-pretrain
+  entity: null
+  group: fw-100b
+  run_name: null
+  run_id: null
+  tags: [slinoss, fwedu, 180m]
+  mode: online
+  resume: allow
+  upload_checkpoints: false
+```
+
+If a run resumes from the same run directory, the trainer reuses the previously
+persisted W&B run id from `wandb-run.json`.
 
 ## What Is Not Assumed
 
