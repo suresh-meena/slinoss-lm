@@ -37,7 +37,7 @@ from .common import (
     set_seed,
     tokens_per_step,
 )
-from .config import ExperimentConfig, config_to_dict, load_config
+from .config import ExperimentConfig, TrainConfig, config_to_dict, load_config
 from .configuration_slinoss_lm import SLinOSSLMConfig
 from .data import (
     CudaPrefetcher,
@@ -50,11 +50,97 @@ from .wandb_integration import WandbLogger, build_wandb_logger
 
 
 STOP_REQUESTED = False
+WALL_CLOCK_DEADLINE_ENV = "SLINOSS_WALL_CLOCK_DEADLINE_UNIX"
+MAX_RUNTIME_ENV = "SLINOSS_MAX_RUNTIME_SECONDS"
+WALL_CLOCK_MARGIN_ENV = "SLINOSS_WALL_CLOCK_EXIT_MARGIN_SECONDS"
 
 
 def _signal_handler(signum: int, _frame: object) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
+
+
+def _parse_positive_int(raw: str, *, field_name: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an integer; got {raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"{field_name} must be > 0; got {value}")
+    return value
+
+
+def _parse_non_negative_int(raw: str, *, field_name: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an integer; got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"{field_name} must be >= 0; got {value}")
+    return value
+
+
+def resolve_wall_clock_controls(
+    config: TrainConfig,
+    *,
+    launch_time_unix: float,
+    env: Mapping[str, str] | None = None,
+) -> tuple[int | None, int]:
+    env_map = env if env is not None else os.environ
+    margin_seconds = int(config.wall_clock_exit_margin_seconds)
+    if margin_seconds < 0:
+        raise ValueError(
+            f"train.wall_clock_exit_margin_seconds must be >= 0; got {margin_seconds}"
+        )
+
+    env_margin = env_map.get(WALL_CLOCK_MARGIN_ENV)
+    if env_margin:
+        margin_seconds = _parse_non_negative_int(
+            env_margin, field_name=f"environment variable {WALL_CLOCK_MARGIN_ENV}"
+        )
+
+    deadline_candidates: list[int] = []
+    if config.wall_clock_deadline_unix is not None:
+        deadline_candidates.append(
+            _parse_positive_int(
+                str(config.wall_clock_deadline_unix),
+                field_name="train.wall_clock_deadline_unix",
+            )
+        )
+    if (env_deadline := env_map.get(WALL_CLOCK_DEADLINE_ENV)) is not None:
+        deadline_candidates.append(
+            _parse_positive_int(
+                env_deadline,
+                field_name=f"environment variable {WALL_CLOCK_DEADLINE_ENV}",
+            )
+        )
+
+    max_runtime_seconds: int | None = config.max_runtime_seconds
+    if (env_runtime := env_map.get(MAX_RUNTIME_ENV)) is not None:
+        max_runtime_seconds = _parse_positive_int(
+            env_runtime, field_name=f"environment variable {MAX_RUNTIME_ENV}"
+        )
+    elif max_runtime_seconds is not None:
+        max_runtime_seconds = _parse_positive_int(
+            str(max_runtime_seconds), field_name="train.max_runtime_seconds"
+        )
+
+    if max_runtime_seconds is not None:
+        deadline_candidates.append(int(launch_time_unix) + max_runtime_seconds)
+
+    deadline_unix = min(deadline_candidates) if deadline_candidates else None
+    return deadline_unix, margin_seconds
+
+
+def should_request_stop_for_wall_clock(
+    *,
+    now_unix: float,
+    deadline_unix: int | None,
+    margin_seconds: int,
+) -> bool:
+    if deadline_unix is None:
+        return False
+    return now_unix >= (deadline_unix - margin_seconds)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -233,6 +319,13 @@ def main() -> None:
 
     try:
         rank, local_rank, world_size = init_distributed()
+        launch_wall_unix = time.time()
+        wall_clock_deadline_unix, wall_clock_exit_margin_seconds = (
+            resolve_wall_clock_controls(
+                config.train,
+                launch_time_unix=launch_wall_unix,
+            )
+        )
         device = (
             torch.device("cuda", local_rank)
             if torch.cuda.is_available()
@@ -283,6 +376,7 @@ def main() -> None:
                 device_ids=[local_rank],
                 output_device=local_rank,
                 gradient_as_bucket_view=True,
+                static_graph=config.runtime.ddp_static_graph,
             )
 
         optimizer = build_optimizer(base_model, config)
@@ -325,6 +419,8 @@ def main() -> None:
                     "dataset_tokens": meta.n_tokens,
                     "tokenizer_id": meta.tokenizer_id,
                     "resume_checkpoint": str(latest) if latest is not None else None,
+                    "wall_clock_deadline_unix": wall_clock_deadline_unix,
+                    "wall_clock_exit_margin_seconds": wall_clock_exit_margin_seconds,
                 },
             )
 
@@ -346,17 +442,49 @@ def main() -> None:
                 meta.root,
                 format_int(global_batch_tokens),
             )
+            if wall_clock_deadline_unix is not None:
+                logger.info(
+                    "Wall-clock deadline enabled: deadline_unix=%s margin_seconds=%s",
+                    format_int(wall_clock_deadline_unix),
+                    wall_clock_exit_margin_seconds,
+                )
 
         start_time = time.perf_counter()
         last_log_time = start_time
         last_checkpoint_time = start_time
         running_loss = 0.0
+        running_step_time = 0.0
         running_steps = 0
+        wall_clock_stop_announced = False
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
 
         base_model.train()
         optimizer.zero_grad(set_to_none=True)
 
         while tokens_consumed < config.train.target_tokens:
+            time_stop_requested = False
+            if is_main_process():
+                time_stop_requested = should_request_stop_for_wall_clock(
+                    now_unix=time.time(),
+                    deadline_unix=wall_clock_deadline_unix,
+                    margin_seconds=wall_clock_exit_margin_seconds,
+                )
+            if world_size > 1:
+                stop_flag = torch.tensor(
+                    1 if time_stop_requested else 0, device=device, dtype=torch.int32
+                )
+                dist.broadcast(stop_flag, src=0)
+                time_stop_requested = bool(int(stop_flag.item()))
+            if time_stop_requested:
+                STOP_REQUESTED = True
+                if is_main_process() and not wall_clock_stop_announced:
+                    logger.warning(
+                        "Wall-clock margin reached; stopping after the next checkpoint-safe step."
+                    )
+                    wall_clock_stop_announced = True
+
+            step_start = time.perf_counter()
             micro_losses: list[float] = []
             for micro_step in range(config.runtime.grad_accum_steps):
                 try:
@@ -408,6 +536,7 @@ def main() -> None:
             )
             tokens_consumed += global_batch_tokens
             running_loss += sum(micro_losses) / len(micro_losses)
+            running_step_time += time.perf_counter() - step_start
             running_steps += 1
 
             if step % config.logging.log_every_steps == 0:
@@ -416,6 +545,7 @@ def main() -> None:
                 steps = max(running_steps, 1)
                 toks_per_sec = (global_batch_tokens * steps) / max(elapsed, 1e-6)
                 avg_loss = running_loss / steps
+                avg_step_time = running_step_time / steps
                 if is_main_process():
                     payload = {
                         "step": step,
@@ -425,24 +555,54 @@ def main() -> None:
                         "lr": lr,
                         "grad_norm": float(grad_norm),
                         "tokens_per_second": toks_per_sec,
+                        "step_time_seconds": avg_step_time,
                         "elapsed_seconds": time.perf_counter() - start_time,
                     }
+                    if device.type == "cuda":
+                        payload["cuda_memory_allocated_bytes"] = int(
+                            torch.cuda.memory_allocated(device)
+                        )
+                        payload["cuda_memory_reserved_bytes"] = int(
+                            torch.cuda.memory_reserved(device)
+                        )
+                        payload["cuda_max_memory_allocated_bytes"] = int(
+                            torch.cuda.max_memory_allocated(device)
+                        )
                     append_jsonl(run_dir / "metrics.jsonl", payload)
                     atomic_write_json(run_dir / "run-state.json", payload)
                     if wandb_logger is not None:
                         wandb_logger.log_training(payload)
-                    logger.info(
-                        "step=%s loss=%.4f lr=%.3e grad_norm=%.3f tokens=%s toks/s=%.1f",
-                        format_int(step),
-                        avg_loss,
-                        lr,
-                        float(grad_norm),
-                        format_int(tokens_consumed),
-                        toks_per_sec,
-                    )
+                    if device.type == "cuda":
+                        logger.info(
+                            "step=%s loss=%.4f lr=%.3e grad_norm=%.3f tokens=%s "
+                            "toks/s=%.1f step=%.3fs peak_mem=%.2fGiB",
+                            format_int(step),
+                            avg_loss,
+                            lr,
+                            float(grad_norm),
+                            format_int(tokens_consumed),
+                            toks_per_sec,
+                            avg_step_time,
+                            torch.cuda.max_memory_allocated(device) / (1024**3),
+                        )
+                    else:
+                        logger.info(
+                            "step=%s loss=%.4f lr=%.3e grad_norm=%.3f tokens=%s "
+                            "toks/s=%.1f step=%.3fs",
+                            format_int(step),
+                            avg_loss,
+                            lr,
+                            float(grad_norm),
+                            format_int(tokens_consumed),
+                            toks_per_sec,
+                            avg_step_time,
+                        )
                 running_loss = 0.0
+                running_step_time = 0.0
                 running_steps = 0
                 last_log_time = now
+                if device.type == "cuda":
+                    torch.cuda.reset_peak_memory_stats(device)
 
             should_validate = (
                 config.validation.enabled

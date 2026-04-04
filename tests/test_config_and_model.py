@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import torch.nn as nn
+
 from slinoss_lm.configuration_slinoss_lm import SLinOSSLMConfig
 from slinoss_lm.config import load_config
 from slinoss_lm.inspect import inspect_config
@@ -92,3 +94,38 @@ runtime:
     assert payload["world_size"] == 4
     assert payload["global_batch_tokens"] == 4096
     assert payload["optimizer_steps_to_target_tokens"] == 1
+
+
+def test_model_passes_mixer_stability_defaults(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _DummyMixer(nn.Module):
+        def __init__(self, d_model: int, **kwargs: object) -> None:
+            super().__init__()
+            captured["d_model"] = d_model
+            captured["kwargs"] = kwargs
+
+        def forward(self, x):  # type: ignore[no-untyped-def]
+            return x
+
+    import slinoss_lm.modeling_slinoss_lm as modeling
+
+    monkeypatch.setattr(modeling, "SLinOSSMixer", _DummyMixer)
+    config = SLinOSSLMConfig(
+        vocab_size=128256,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        d_state=32,
+        expand=2,
+        d_head=32,
+        d_conv=4,
+        chunk_size=16,
+    )
+    _ = modeling.SLinOSSCausalLM(config)
+    assert captured["d_model"] == 64
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["r_min"] == 0.2
+    assert kwargs["dt_min"] == 1.0e-3
+    assert kwargs["dt_init_floor"] == 1.0e-3

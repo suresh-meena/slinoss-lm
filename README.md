@@ -67,6 +67,9 @@ Shared mixer defaults:
 - `d_head=64`
 - `d_conv=4`
 - `chunk_size=64`
+- `dt_min=1e-3`
+- `dt_init_floor=1e-3`
+- `r_min=0.2`
 
 Training contract:
 
@@ -140,6 +143,20 @@ torchrun --standalone --nproc-per-node=2 train.py \
 ```
 
 If you need host-specific batch geometry, keep that in an untracked local config and pass it as an additional `--config`.
+
+Wall-clock aware stopping is supported through config or environment overrides.
+This is useful for queue systems where jobs must checkpoint before hard timeout:
+
+```bash
+export SLINOSS_WALL_CLOCK_DEADLINE_UNIX=<unix-seconds>
+export SLINOSS_WALL_CLOCK_EXIT_MARGIN_SECONDS=900
+```
+
+Equivalent config fields are:
+
+- `train.wall_clock_deadline_unix`
+- `train.max_runtime_seconds`
+- `train.wall_clock_exit_margin_seconds`
 
 ## Outputs
 

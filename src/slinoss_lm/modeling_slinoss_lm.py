@@ -35,6 +35,9 @@ class SLinOSSBlock(nn.Module):
             d_head=config.d_head,
             d_conv=config.d_conv,
             chunk_size=config.chunk_size,
+            dt_min=config.dt_min,
+            dt_init_floor=config.dt_init_floor,
+            r_min=config.r_min,
         )
         self.post_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = SwiGLU(config.hidden_size, config.intermediate_size)

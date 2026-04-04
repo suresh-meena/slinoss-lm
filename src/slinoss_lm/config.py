@@ -18,6 +18,9 @@ class ModelConfig:
     d_head: int = 64
     d_conv: int = 4
     chunk_size: int = 64
+    dt_min: float = 1.0e-3
+    dt_init_floor: float = 1.0e-3
+    r_min: float = 0.2
     rms_norm_eps: float = 1.0e-5
     initializer_range: float = 0.02
     tie_word_embeddings: bool = True
@@ -55,6 +58,9 @@ class TrainConfig:
     allow_tf32: bool = True
     compile: bool = False
     compile_mode: str = "max-autotune-no-cudagraphs"
+    max_runtime_seconds: int | None = None
+    wall_clock_deadline_unix: int | None = None
+    wall_clock_exit_margin_seconds: int = 900
 
 
 @dataclass
@@ -65,6 +71,7 @@ class RuntimeConfig:
     prefetch_factor: int = 4
     persistent_workers: bool = True
     pin_memory: bool = True
+    ddp_static_graph: bool = True
 
 
 @dataclass

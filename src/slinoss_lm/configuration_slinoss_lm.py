@@ -17,6 +17,9 @@ class SLinOSSLMConfig(PretrainedConfig):
         d_head: int = 64,
         d_conv: int = 4,
         chunk_size: int = 64,
+        dt_min: float = 1.0e-3,
+        dt_init_floor: float = 1.0e-3,
+        r_min: float = 0.2,
         rms_norm_eps: float = 1.0e-5,
         initializer_range: float = 0.02,
         tie_word_embeddings: bool = True,
@@ -32,6 +35,9 @@ class SLinOSSLMConfig(PretrainedConfig):
         self.d_head = d_head
         self.d_conv = d_conv
         self.chunk_size = chunk_size
+        self.dt_min = dt_min
+        self.dt_init_floor = dt_init_floor
+        self.r_min = r_min
         self.rms_norm_eps = rms_norm_eps
         self.initializer_range = initializer_range
         self.tie_word_embeddings = tie_word_embeddings
