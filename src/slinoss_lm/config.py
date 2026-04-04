@@ -37,7 +37,8 @@ class DataConfig:
 @dataclass
 class OptimConfig:
     peak_lr: float = 4.0e-4
-    min_lr_ratio: float = 0.1
+    min_lr: float = 1.0e-5
+    min_lr_ratio: float | None = None
     warmup_tokens: int = 1_000_000_000
     weight_decay: float = 0.1
     beta1: float = 0.9
@@ -70,6 +71,7 @@ class RuntimeConfig:
 class CheckpointConfig:
     run_root: str = "runs"
     save_every_steps: int = 5000
+    save_every_minutes: int = 0
     keep_last: int = 3
     save_on_signal: bool = True
 

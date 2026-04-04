@@ -115,7 +115,11 @@ def build_optimizer(
 class CosineSchedule:
     def __init__(self, config: ExperimentConfig, global_batch_tokens: int) -> None:
         self.peak_lr = config.optim.peak_lr
-        self.min_lr = config.optim.peak_lr * config.optim.min_lr_ratio
+        self.min_lr = (
+            config.optim.peak_lr * config.optim.min_lr_ratio
+            if config.optim.min_lr_ratio is not None
+            else config.optim.min_lr
+        )
         self.warmup_steps = max(
             1, math.ceil(config.optim.warmup_tokens / global_batch_tokens)
         )
@@ -345,6 +349,7 @@ def main() -> None:
 
         start_time = time.perf_counter()
         last_log_time = start_time
+        last_checkpoint_time = start_time
         running_loss = 0.0
         running_steps = 0
 
@@ -460,8 +465,19 @@ def main() -> None:
                     )
 
             should_save = step % config.checkpoint.save_every_steps == 0
+            if is_main_process() and config.checkpoint.save_every_minutes > 0:
+                should_save = should_save or (
+                    (time.perf_counter() - last_checkpoint_time)
+                    >= config.checkpoint.save_every_minutes * 60
+                )
             if STOP_REQUESTED and config.checkpoint.save_on_signal:
                 should_save = True
+            if world_size > 1:
+                save_flag = torch.tensor(
+                    1 if should_save else 0, device=device, dtype=torch.int32
+                )
+                dist.broadcast(save_flag, src=0)
+                should_save = bool(int(save_flag.item()))
             if should_save:
                 barrier()
                 if is_main_process():
@@ -487,6 +503,7 @@ def main() -> None:
                         )
                     logger.info("Saved checkpoint at step=%s", format_int(step))
                 barrier()
+                last_checkpoint_time = time.perf_counter()
 
             if STOP_REQUESTED:
                 if is_main_process():

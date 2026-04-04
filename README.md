@@ -80,7 +80,7 @@ Training contract:
 - weight decay: `0.1`
 - grad clip: `1.0`
 - dropout: `0.0`
-- LR schedule: linear warmup, then cosine decay to `10%` of peak LR
+- LR schedule: linear warmup, then cosine decay to `1e-5`
 
 Peak LR choices used here:
 
