@@ -126,7 +126,7 @@ def test_model_passes_mixer_stability_defaults(monkeypatch) -> None:
     assert captured["d_model"] == 64
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
-    assert kwargs["r_min"] == 0.5
+    assert kwargs["r_min"] == 0.8
     assert kwargs["dt_min"] == 1.0e-3
     assert kwargs["dt_init_floor"] == 1.0e-3
 

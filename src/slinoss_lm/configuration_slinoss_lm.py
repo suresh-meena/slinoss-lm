@@ -19,7 +19,7 @@ class SLinOSSLMConfig(PretrainedConfig):
         chunk_size: int = 64,
         dt_min: float = 1.0e-3,
         dt_init_floor: float = 1.0e-3,
-        r_min: float = 0.5,
+        r_min: float = 0.8,
         rms_norm_eps: float = 1.0e-5,
         initializer_range: float = 0.02,
         tie_word_embeddings: bool = True,
