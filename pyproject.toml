@@ -15,7 +15,7 @@ dependencies = [
   "packaging>=24,<26",
   "PyYAML>=6,<7",
   "safetensors>=0.5,<1",
-  "slinoss[cuda] @ https://github.com/b-vitamins/slinoss/releases/download/v0.4.0/slinoss-0.4.0-cp311-cp311-linux_x86_64.whl#sha256=1877c2637c4b4577154dc31b60026c76c939177127e0ecc5a04e11b81e90fa0f",
+  "slinoss[cuda] @ https://github.com/b-vitamins/slinoss/releases/download/v0.4.1/slinoss-0.4.1-cp311-cp311-linux_x86_64.whl#sha256=d8750f3a2d441c736d28f5796a0b995ccd84e0d1b08258abe2f9335abd06b8fe",
   "tokenizers>=0.22,<0.23",
   "torch==2.10.0",
   "tqdm>=4.66,<5",
