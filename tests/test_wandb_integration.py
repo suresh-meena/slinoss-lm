@@ -198,3 +198,28 @@ def test_build_wandb_logger_reuses_run_id_and_logs_metrics(tmp_path: Path) -> No
     artifact, aliases = run.artifacts[0]
     assert artifact.directories == [str(checkpoint_dir)]
     assert aliases == ["latest", "step-000000010"]
+
+
+def test_build_wandb_logger_does_not_reuse_previous_run_id_when_resume_never(
+    tmp_path: Path,
+) -> None:
+    config = ExperimentConfig()
+    config.name = "fwedu-180m"
+    config.wandb.enabled = True
+    config.wandb.project = "slinoss-pretrain"
+    config.wandb.mode = "offline"
+    config.wandb.resume = "never"
+    (tmp_path / "wandb-run.json").write_text(json.dumps({"id": "previous-run-id"}))
+    fake_wandb = FakeWandb()
+
+    build_wandb_logger(
+        config=config,
+        run_dir=tmp_path,
+        allow_resume=True,
+        run_metadata={"parameter_count": 181145632},
+        module=fake_wandb,
+    )
+
+    init_call = fake_wandb.init_calls[0]
+    assert init_call["id"] is None
+    assert init_call["resume"] == "never"

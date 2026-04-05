@@ -12,7 +12,7 @@ model:
   chunk_size: 64
   dt_min: 1.0e-3
   dt_init_floor: 1.0e-3
-  r_min: 0.2
+  r_min: 0.5
   rms_norm_eps: 1.0e-5
   initializer_range: 0.02
   tie_word_embeddings: true

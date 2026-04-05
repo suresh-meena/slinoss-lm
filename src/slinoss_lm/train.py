@@ -143,6 +143,41 @@ def should_request_stop_for_wall_clock(
     return now_unix >= (deadline_unix - margin_seconds)
 
 
+def build_training_metrics_payload(
+    *,
+    step: int,
+    tokens_consumed: int,
+    sequences_consumed: int,
+    loss: float,
+    lr: float,
+    grad_norm: float,
+    tokens_per_second: float,
+    step_time_seconds: float,
+    elapsed_seconds: float,
+    device: torch.device,
+) -> dict[str, int | float]:
+    payload: dict[str, int | float] = {
+        "step": step,
+        "tokens_consumed": tokens_consumed,
+        "sequences_consumed": sequences_consumed,
+        "loss": loss,
+        "lr": lr,
+        "grad_norm": grad_norm,
+        "tokens_per_second": tokens_per_second,
+        "step_time_seconds": step_time_seconds,
+        "elapsed_seconds": elapsed_seconds,
+    }
+    if device.type == "cuda":
+        payload["cuda_memory_allocated_bytes"] = int(
+            torch.cuda.memory_allocated(device)
+        )
+        payload["cuda_memory_reserved_bytes"] = int(torch.cuda.memory_reserved(device))
+        payload["cuda_max_memory_allocated_bytes"] = int(
+            torch.cuda.max_memory_allocated(device)
+        )
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", action="append", required=True)
@@ -456,6 +491,8 @@ def main() -> None:
         running_step_time = 0.0
         running_steps = 0
         wall_clock_stop_announced = False
+        last_lr = 0.0
+        last_grad_norm = 0.0
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
 
@@ -525,6 +562,8 @@ def main() -> None:
                 config.optim.grad_clip_norm,
             )
             lr = scheduler.step(optimizer, step)
+            last_lr = lr
+            last_grad_norm = float(grad_norm)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
@@ -547,27 +586,18 @@ def main() -> None:
                 avg_loss = running_loss / steps
                 avg_step_time = running_step_time / steps
                 if is_main_process():
-                    payload = {
-                        "step": step,
-                        "tokens_consumed": tokens_consumed,
-                        "sequences_consumed": sequences_consumed,
-                        "loss": avg_loss,
-                        "lr": lr,
-                        "grad_norm": float(grad_norm),
-                        "tokens_per_second": toks_per_sec,
-                        "step_time_seconds": avg_step_time,
-                        "elapsed_seconds": time.perf_counter() - start_time,
-                    }
-                    if device.type == "cuda":
-                        payload["cuda_memory_allocated_bytes"] = int(
-                            torch.cuda.memory_allocated(device)
-                        )
-                        payload["cuda_memory_reserved_bytes"] = int(
-                            torch.cuda.memory_reserved(device)
-                        )
-                        payload["cuda_max_memory_allocated_bytes"] = int(
-                            torch.cuda.max_memory_allocated(device)
-                        )
+                    payload = build_training_metrics_payload(
+                        step=step,
+                        tokens_consumed=tokens_consumed,
+                        sequences_consumed=sequences_consumed,
+                        loss=avg_loss,
+                        lr=last_lr,
+                        grad_norm=last_grad_norm,
+                        tokens_per_second=toks_per_sec,
+                        step_time_seconds=avg_step_time,
+                        elapsed_seconds=time.perf_counter() - start_time,
+                        device=device,
+                    )
                     append_jsonl(run_dir / "metrics.jsonl", payload)
                     atomic_write_json(run_dir / "run-state.json", payload)
                     if wandb_logger is not None:
@@ -675,23 +705,54 @@ def main() -> None:
         barrier()
         if is_main_process():
             elapsed = time.perf_counter() - start_time
-            if wandb_logger is not None:
-                wandb_logger.update_summary(
-                    {
-                        "final_step": step,
-                        "final_tokens_consumed": tokens_consumed,
-                        "final_sequences_consumed": sequences_consumed,
-                        "elapsed_seconds": elapsed,
-                        "stop_requested": STOP_REQUESTED,
-                    }
+            if running_steps > 0:
+                tail_payload = build_training_metrics_payload(
+                    step=step,
+                    tokens_consumed=tokens_consumed,
+                    sequences_consumed=sequences_consumed,
+                    loss=running_loss / running_steps,
+                    lr=last_lr,
+                    grad_norm=last_grad_norm,
+                    tokens_per_second=(global_batch_tokens * running_steps)
+                    / max(time.perf_counter() - last_log_time, 1e-6),
+                    step_time_seconds=running_step_time / running_steps,
+                    elapsed_seconds=elapsed,
+                    device=device,
                 )
-            logger.info(
-                "Finished run=%s step=%s tokens=%s elapsed=%s",
-                config.name,
-                format_int(step),
-                format_int(tokens_consumed),
-                format_duration(elapsed),
-            )
+                append_jsonl(run_dir / "metrics.jsonl", tail_payload)
+                atomic_write_json(run_dir / "run-state.json", tail_payload)
+                if wandb_logger is not None:
+                    wandb_logger.log_training(tail_payload)
+            if wandb_logger is not None:
+                summary_payload: dict[str, int | float | bool] = {
+                    "final_step": step,
+                    "final_tokens_consumed": tokens_consumed,
+                    "final_sequences_consumed": sequences_consumed,
+                    "elapsed_seconds": elapsed,
+                    "stop_requested": STOP_REQUESTED,
+                }
+                if device.type == "cuda":
+                    summary_payload["cuda_max_memory_allocated_bytes"] = int(
+                        torch.cuda.max_memory_allocated(device)
+                    )
+                wandb_logger.update_summary(summary_payload)
+            if device.type == "cuda":
+                logger.info(
+                    "Finished run=%s step=%s tokens=%s elapsed=%s peak_mem=%.2fGiB",
+                    config.name,
+                    format_int(step),
+                    format_int(tokens_consumed),
+                    format_duration(elapsed),
+                    torch.cuda.max_memory_allocated(device) / (1024**3),
+                )
+            else:
+                logger.info(
+                    "Finished run=%s step=%s tokens=%s elapsed=%s",
+                    config.name,
+                    format_int(step),
+                    format_int(tokens_consumed),
+                    format_duration(elapsed),
+                )
         exit_code = 0
     finally:
         if is_main_process() and wandb_logger is not None:

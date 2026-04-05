@@ -20,7 +20,7 @@ class ModelConfig:
     chunk_size: int = 64
     dt_min: float = 1.0e-3
     dt_init_floor: float = 1.0e-3
-    r_min: float = 0.2
+    r_min: float = 0.5
     rms_norm_eps: float = 1.0e-5
     initializer_range: float = 0.02
     tie_word_embeddings: bool = True
@@ -71,7 +71,7 @@ class RuntimeConfig:
     prefetch_factor: int = 4
     persistent_workers: bool = True
     pin_memory: bool = True
-    ddp_static_graph: bool = True
+    ddp_static_graph: bool = False
 
 
 @dataclass

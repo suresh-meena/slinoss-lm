@@ -126,6 +126,11 @@ def test_model_passes_mixer_stability_defaults(monkeypatch) -> None:
     assert captured["d_model"] == 64
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
-    assert kwargs["r_min"] == 0.2
+    assert kwargs["r_min"] == 0.5
     assert kwargs["dt_min"] == 1.0e-3
     assert kwargs["dt_init_floor"] == 1.0e-3
+
+
+def test_runtime_defaults_disable_ddp_static_graph() -> None:
+    config = load_config([])
+    assert config.runtime.ddp_static_graph is False

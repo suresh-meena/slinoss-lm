@@ -145,7 +145,7 @@ def build_wandb_logger(
     ensure_dir(run_dir)
     metadata_path = _wandb_run_metadata_path(run_dir)
     run_id = wandb_config.run_id
-    if run_id is None and allow_resume:
+    if run_id is None and allow_resume and wandb_config.resume != "never":
         run_id = _load_previous_run_id(run_dir)
     run = wandb.init(
         project=wandb_config.project,

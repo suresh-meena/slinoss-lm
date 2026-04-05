@@ -69,7 +69,7 @@ Shared mixer defaults:
 - `chunk_size=64`
 - `dt_min=1e-3`
 - `dt_init_floor=1e-3`
-- `r_min=0.2`
+- `r_min=0.5`
 
 Training contract:
 
