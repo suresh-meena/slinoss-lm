@@ -55,10 +55,10 @@ This path is the exact output of the `fineweb` transfer workflow.
 
 Four parameter-matched SLinOSS runs are configured:
 
-- `fwedu-180m`: `14` layers, `d_model=512`, `intermediate_size=1536`
-- `fwedu-440m`: `18` layers, `d_model=768`, `intermediate_size=2560`
-- `fwedu-880m`: `22` layers, `d_model=1024`, `intermediate_size=3328`
-- `fwedu-1p5b`: `26` layers, `d_model=1280`, `intermediate_size=3840`
+- `fwedu-180m`: `13` layers, `d_model=576`, `intermediate_size=2048`
+- `fwedu-440m`: `18` layers, `d_model=896`, `intermediate_size=2560`
+- `fwedu-880m`: `23` layers, `d_model=1152`, `intermediate_size=3840`
+- `fwedu-1p5b`: `25` layers, `d_model=1536`, `intermediate_size=4096`
 
 Shared mixer defaults:
 

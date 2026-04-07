@@ -2,9 +2,9 @@ name: fwedu-880m
 
 model:
   vocab_size: 128256
-  hidden_size: 1024
-  intermediate_size: 3328
-  num_hidden_layers: 22
+  hidden_size: 1152
+  intermediate_size: 3840
+  num_hidden_layers: 23
   d_state: 128
   expand: 2
   d_head: 64

@@ -2,9 +2,9 @@ name: fwedu-1p5b
 
 model:
   vocab_size: 128256
-  hidden_size: 1280
-  intermediate_size: 3840
-  num_hidden_layers: 26
+  hidden_size: 1536
+  intermediate_size: 4096
+  num_hidden_layers: 25
   d_state: 128
   expand: 2
   d_head: 64

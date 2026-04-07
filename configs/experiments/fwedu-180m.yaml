@@ -2,9 +2,9 @@ name: fwedu-180m
 
 model:
   vocab_size: 128256
-  hidden_size: 512
-  intermediate_size: 1536
-  num_hidden_layers: 14
+  hidden_size: 576
+  intermediate_size: 2048
+  num_hidden_layers: 13
   d_state: 128
   expand: 2
   d_head: 64

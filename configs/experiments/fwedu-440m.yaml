@@ -2,7 +2,7 @@ name: fwedu-440m
 
 model:
   vocab_size: 128256
-  hidden_size: 768
+  hidden_size: 896
   intermediate_size: 2560
   num_hidden_layers: 18
   d_state: 128
