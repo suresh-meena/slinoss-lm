@@ -16,7 +16,7 @@ from .modeling_slinoss_lm import SLinOSSCausalLM
 def inspect_config(config: ExperimentConfig, *, world_size: int) -> dict[str, Any]:
     if world_size <= 0:
         raise ValueError(f"world_size must be positive. Got {world_size}.")
-    hf_config = SLinOSSLMConfig(**config.model.__dict__)
+    hf_config = SLinOSSLMConfig(**config.model.architecture_kwargs())
     model = SLinOSSCausalLM(hf_config)
     meta = load_packed_meta(config.data)
     global_batch_tokens = tokens_per_step(

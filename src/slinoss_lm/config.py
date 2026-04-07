@@ -26,6 +26,11 @@ class ModelConfig:
     tie_word_embeddings: bool = True
     gradient_checkpointing: bool = False
 
+    def architecture_kwargs(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload.pop("gradient_checkpointing", None)
+        return payload
+
 
 @dataclass
 class DataConfig:

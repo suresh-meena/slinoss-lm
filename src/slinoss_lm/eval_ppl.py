@@ -34,7 +34,7 @@ def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config, args.overrides)
     ckpt = load_checkpoint(Path(args.checkpoint), map_location="cpu")
-    model = SLinOSSCausalLM(SLinOSSLMConfig(**config.model.__dict__))
+    model = SLinOSSCausalLM(SLinOSSLMConfig(**config.model.architecture_kwargs()))
     model.load_state_dict(ckpt["model"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import warnings
 
 import torch.nn as nn
 
 from slinoss_lm.configuration_slinoss_lm import SLinOSSLMConfig
-from slinoss_lm.config import load_config
+from slinoss_lm.config import ModelConfig, load_config
 from slinoss_lm.inspect import inspect_config
 from slinoss_lm.modeling_slinoss_lm import SLinOSSCausalLM
 
@@ -134,3 +135,17 @@ def test_model_passes_mixer_stability_defaults(monkeypatch) -> None:
 def test_runtime_defaults_disable_ddp_static_graph() -> None:
     config = load_config([])
     assert config.runtime.ddp_static_graph is False
+
+
+def test_model_architecture_kwargs_excludes_runtime_fields() -> None:
+    config = ModelConfig(gradient_checkpointing=True)
+    kwargs = config.architecture_kwargs()
+    assert "gradient_checkpointing" not in kwargs
+    assert kwargs["hidden_size"] == config.hidden_size
+
+
+def test_hf_config_init_does_not_warn_for_gradient_checkpointing() -> None:
+    config = ModelConfig(gradient_checkpointing=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _ = SLinOSSLMConfig(**config.architecture_kwargs())

@@ -396,7 +396,7 @@ def main() -> None:
             world_size=world_size,
         )
 
-        hf_config = SLinOSSLMConfig(**config.model.__dict__)
+        hf_config = SLinOSSLMConfig(**config.model.architecture_kwargs())
         base_model = SLinOSSCausalLM(hf_config)
         base_model.gradient_checkpointing = bool(config.model.gradient_checkpointing)
         if device.type == "cuda":

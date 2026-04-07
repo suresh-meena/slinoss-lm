@@ -37,7 +37,7 @@ def _export_checkpoint(
     tokenizer_ref: str,
 ) -> None:
     payload = load_checkpoint(checkpoint_path, map_location="cpu")
-    model = SLinOSSCausalLM(SLinOSSLMConfig(**config.model.__dict__))
+    model = SLinOSSCausalLM(SLinOSSLMConfig(**config.model.architecture_kwargs()))
     model.load_state_dict(payload["model"])
     model.eval()
     export_dir.mkdir(parents=True, exist_ok=True)
