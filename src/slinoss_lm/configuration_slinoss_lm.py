@@ -20,6 +20,8 @@ class SLinOSSLMConfig(PretrainedConfig):
         dt_min: float = 1.0e-3,
         dt_init_floor: float = 1.0e-3,
         r_min: float = 0.8,
+        residual_in_fp32: bool = True,
+        mlp_multiple_of: int = 128,
         rms_norm_eps: float = 1.0e-5,
         initializer_range: float = 0.02,
         tie_word_embeddings: bool = True,
@@ -38,6 +40,8 @@ class SLinOSSLMConfig(PretrainedConfig):
         self.dt_min = dt_min
         self.dt_init_floor = dt_init_floor
         self.r_min = r_min
+        self.residual_in_fp32 = residual_in_fp32
+        self.mlp_multiple_of = mlp_multiple_of
         self.rms_norm_eps = rms_norm_eps
         self.initializer_range = initializer_range
         self.tie_word_embeddings = tie_word_embeddings

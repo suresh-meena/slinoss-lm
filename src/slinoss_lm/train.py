@@ -208,14 +208,17 @@ def build_optimizer(
 ) -> torch.optim.Optimizer:
     decay: list[torch.nn.Parameter] = []
     no_decay: list[torch.nn.Parameter] = []
+    fused_ok = torch.cuda.is_available()
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
+        if param.is_complex():
+            fused_ok = False
         if (
-            param.ndim < 2
+            getattr(param, "_no_weight_decay", False)
+            or param.ndim < 2
             or "norm" in name.lower()
             or name.endswith("bias")
-            or "skip" in name
         ):
             no_decay.append(param)
         else:
@@ -229,7 +232,7 @@ def build_optimizer(
         lr=config.optim.peak_lr,
         betas=(config.optim.beta1, config.optim.beta2),
         eps=config.optim.eps,
-        fused=torch.cuda.is_available(),
+        fused=fused_ok,
     )
 
 

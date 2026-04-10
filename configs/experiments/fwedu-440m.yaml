@@ -2,9 +2,9 @@ name: fwedu-440m
 
 model:
   vocab_size: 128256
-  hidden_size: 896
-  intermediate_size: 2560
-  num_hidden_layers: 18
+  hidden_size: 1024
+  intermediate_size: 1536
+  num_hidden_layers: 16
   d_state: 128
   expand: 2
   d_head: 64
@@ -13,6 +13,8 @@ model:
   dt_min: 1.0e-3
   dt_init_floor: 1.0e-3
   r_min: 0.8
+  residual_in_fp32: true
+  mlp_multiple_of: 128
   rms_norm_eps: 1.0e-5
   initializer_range: 0.02
   tie_word_embeddings: true
@@ -62,13 +64,13 @@ logging:
   log_every_steps: 10
 
 validation:
-  enabled: false
+  enabled: true
   dataset_root: null
   dataset_dir: null
-  start_sequence: 0
-  num_sequences: 0
-  batch_size: 16
-  every_steps: 0
+  start_sequence: -4096
+  num_sequences: 4096
+  batch_size: 2
+  every_steps: 100
 
 eval:
   zero_shot_tasks:

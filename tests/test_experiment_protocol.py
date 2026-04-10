@@ -32,10 +32,16 @@ def test_all_experiment_configs_load() -> None:
 
 def test_lm_protocol_is_locked() -> None:
     expected_peak_lr = {
-        "fwedu-180m": 4.0e-4,
+        "fwedu-180m": 6.0e-4,
         "fwedu-440m": 3.0e-4,
         "fwedu-880m": 2.5e-4,
         "fwedu-1p5b": 2.0e-4,
+    }
+    expected_arch = {
+        "fwedu-180m": (768, 896, 8),
+        "fwedu-440m": (1024, 1536, 16),
+        "fwedu-880m": (1536, 2048, 16),
+        "fwedu-1p5b": (2048, 2944, 16),
     }
     expected_save_every_minutes = {
         "fwedu-180m": 0,
@@ -59,23 +65,49 @@ def test_lm_protocol_is_locked() -> None:
         assert cfg.data.tokenizer_name == "meta-llama/Llama-3.1-8B"
 
         assert cfg.model.vocab_size == 128256
+        assert (
+            cfg.model.hidden_size,
+            cfg.model.intermediate_size,
+            cfg.model.num_hidden_layers,
+        ) == expected_arch[cfg.name]
         assert cfg.model.d_state == 128
         assert cfg.model.expand == 2
         assert cfg.model.d_head == 64
         assert cfg.model.d_conv == 4
         assert cfg.model.chunk_size == 64
+        assert cfg.model.residual_in_fp32 is True
+        assert cfg.model.mlp_multiple_of == 128
+        assert cfg.model.rms_norm_eps == 1.0e-5
+        assert cfg.model.initializer_range == 0.02
+        assert cfg.model.tie_word_embeddings is True
+        assert cfg.model.gradient_checkpointing is False
 
         assert cfg.train.target_tokens == 100_000_000_000
         assert cfg.train.precision == "bf16"
+        assert cfg.train.allow_tf32 is True
+        assert cfg.train.compile is False
 
         assert cfg.optim.peak_lr == expected_peak_lr[cfg.name]
         assert cfg.optim.min_lr == 1.0e-5
         assert cfg.optim.min_lr_ratio is None
         assert cfg.optim.beta1 == 0.9
         assert cfg.optim.beta2 == 0.95
+        assert cfg.optim.eps == 1.0e-8
         assert cfg.optim.weight_decay == 0.1
         assert cfg.optim.grad_clip_norm == 1.0
         assert cfg.optim.warmup_tokens == 1_000_000_000
+
+        assert cfg.runtime.per_device_batch_size > 0
+        assert cfg.runtime.grad_accum_steps > 0
+        assert (
+            tokens_per_step(
+                seq_len=cfg.data.seq_len,
+                per_device_batch_size=cfg.runtime.per_device_batch_size,
+                grad_accum_steps=cfg.runtime.grad_accum_steps,
+                world_size=2,
+            )
+            == 524288
+        )
 
         assert cfg.checkpoint.save_every_steps == 5000
         assert (
@@ -83,6 +115,12 @@ def test_lm_protocol_is_locked() -> None:
         )
         assert cfg.checkpoint.keep_last == 3
         assert cfg.checkpoint.save_on_signal is True
+
+        assert cfg.validation.enabled is True
+        assert cfg.validation.start_sequence == -4096
+        assert cfg.validation.num_sequences == 4096
+        assert cfg.validation.batch_size == 2
+        assert cfg.validation.every_steps == 100
 
         assert cfg.eval.zero_shot_tasks == expected_tasks
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Callable, cast
 
 import torch
@@ -13,21 +14,34 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from .configuration_slinoss_lm import SLinOSSLMConfig
 
 
-class SwiGLU(nn.Module):
-    def __init__(self, hidden_size: int, intermediate_size: int) -> None:
+class GatedMLP(nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        *,
+        hidden_features: int,
+        out_features: int | None = None,
+        bias: bool = False,
+        multiple_of: int = 128,
+    ) -> None:
         super().__init__()
-        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
-        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
-        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+        out_features = out_features if out_features is not None else in_features
+        hidden_features = (
+            (hidden_features + multiple_of - 1) // multiple_of * multiple_of
+        )
+        self.fc1 = nn.Linear(in_features, 2 * hidden_features, bias=bias)
+        self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
+        y, gate = self.fc1(x).chunk(2, dim=-1)
+        return self.fc2(y * F.silu(gate))
 
 
 class SLinOSSBlock(nn.Module):
     def __init__(self, config: SLinOSSLMConfig) -> None:
         super().__init__()
-        self.input_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.residual_in_fp32 = bool(config.residual_in_fp32)
+        self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mixer = SLinOSSMixer(
             config.hidden_size,
             d_state=config.d_state,
@@ -39,13 +53,32 @@ class SLinOSSBlock(nn.Module):
             dt_init_floor=config.dt_init_floor,
             r_min=config.r_min,
         )
-        self.post_norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.mlp = SwiGLU(config.hidden_size, config.intermediate_size)
+        self.norm2 = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = GatedMLP(
+            config.hidden_size,
+            hidden_features=config.intermediate_size,
+            out_features=config.hidden_size,
+            bias=False,
+            multiple_of=config.mlp_multiple_of,
+        )
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = hidden_states + self.mixer(self.input_norm(hidden_states))
-        hidden_states = hidden_states + self.mlp(self.post_norm(hidden_states))
-        return hidden_states
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        residual: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        residual = (hidden_states + residual) if residual is not None else hidden_states
+        hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
+        if self.residual_in_fp32:
+            residual = residual.to(torch.float32)
+        hidden_states = self.mixer(hidden_states)
+
+        residual = hidden_states + residual
+        hidden_states = self.norm2(residual.to(dtype=self.norm2.weight.dtype))
+        if self.residual_in_fp32:
+            residual = residual.to(torch.float32)
+        hidden_states = self.mlp(hidden_states)
+        return hidden_states, residual
 
 
 class SLinOSSCausalLM(PreTrainedModel, GenerationMixin):
@@ -60,7 +93,7 @@ class SLinOSSCausalLM(PreTrainedModel, GenerationMixin):
         self.layers = nn.ModuleList(
             [SLinOSSBlock(config) for _ in range(config.num_hidden_layers)]
         )
-        self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm_f = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.gradient_checkpointing = False
         self.post_init()
@@ -68,11 +101,18 @@ class SLinOSSCausalLM(PreTrainedModel, GenerationMixin):
 
     def _init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
-            if module.bias is not None:
+            if module.bias is not None and not getattr(
+                module.bias, "_no_reinit", False
+            ):
                 nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+
+        for name, param in module.named_parameters():
+            if name in ["mixer.out_proj.weight", "mlp.fc2.weight"]:
+                nn.init.kaiming_uniform_(param, a=math.sqrt(5))
+                with torch.no_grad():
+                    param /= math.sqrt(2 * self.config.num_hidden_layers)
 
     def get_input_embeddings(self) -> nn.Module:
         return self.embed_tokens
@@ -124,6 +164,7 @@ class SLinOSSCausalLM(PreTrainedModel, GenerationMixin):
             raise ValueError("Provide only one of input_ids or inputs_embeds.")
         if attention_mask is not None and not torch.all(attention_mask > 0):
             raise ValueError("Packed FineWeb rows do not support padding masks.")
+        del use_cache
         return_dict = (
             self.config.use_return_dict if return_dict is None else return_dict
         )
@@ -131,14 +172,35 @@ class SLinOSSCausalLM(PreTrainedModel, GenerationMixin):
         hidden_states = (
             self.embed_tokens(input_ids) if inputs_embeds is None else inputs_embeds
         )
-
+        residual: torch.Tensor | None = None
         for layer in self.layers:
             if self.gradient_checkpointing and self.training:
-                hidden_states = checkpoint(layer, hidden_states, use_reentrant=False)
+                if residual is None:
+                    hidden_states, residual = cast(
+                        tuple[torch.Tensor, torch.Tensor],
+                        checkpoint(
+                            lambda hs: layer(hs, None),
+                            hidden_states,
+                            use_reentrant=False,
+                        ),
+                    )
+                else:
+                    hidden_states, residual = cast(
+                        tuple[torch.Tensor, torch.Tensor],
+                        checkpoint(
+                            layer,
+                            hidden_states,
+                            residual,
+                            use_reentrant=False,
+                        ),
+                    )
             else:
-                hidden_states = layer(hidden_states)
+                hidden_states, residual = layer(hidden_states, residual)
 
-        hidden_states = self.norm(hidden_states)
+        final_residual = (
+            hidden_states + residual if residual is not None else hidden_states
+        )
+        hidden_states = self.norm_f(final_residual.to(dtype=self.norm_f.weight.dtype))
         logits = self.lm_head(hidden_states)
 
         loss = None

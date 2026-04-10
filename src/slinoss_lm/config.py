@@ -21,6 +21,8 @@ class ModelConfig:
     dt_min: float = 1.0e-3
     dt_init_floor: float = 1.0e-3
     r_min: float = 0.8
+    residual_in_fp32: bool = True
+    mlp_multiple_of: int = 128
     rms_norm_eps: float = 1.0e-5
     initializer_range: float = 0.02
     tie_word_embeddings: bool = True

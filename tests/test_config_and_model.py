@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 import warnings
 
+import torch
 import torch.nn as nn
 
 from slinoss_lm.configuration_slinoss_lm import SLinOSSLMConfig
 from slinoss_lm.config import ModelConfig, load_config
 from slinoss_lm.inspect import inspect_config
-from slinoss_lm.modeling_slinoss_lm import SLinOSSCausalLM
+from slinoss_lm.modeling_slinoss_lm import SLinOSSBlock, SLinOSSCausalLM
+from slinoss_lm.train import build_optimizer
 
 
 def test_model_forward_shape_and_loss() -> None:
@@ -149,3 +151,118 @@ def test_hf_config_init_does_not_warn_for_gradient_checkpointing() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         _ = SLinOSSLMConfig(**config.architecture_kwargs())
+
+
+def test_block_keeps_residual_in_fp32_when_enabled(monkeypatch) -> None:
+    class _DummyMixer(nn.Module):
+        def __init__(self, d_model: int, **_: object) -> None:
+            super().__init__()
+            self.proj = nn.Linear(d_model, d_model, bias=False)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.proj(x)
+
+    import slinoss_lm.modeling_slinoss_lm as modeling
+
+    monkeypatch.setattr(modeling, "SLinOSSMixer", _DummyMixer)
+    config = SLinOSSLMConfig(
+        vocab_size=128256,
+        hidden_size=64,
+        intermediate_size=96,
+        num_hidden_layers=1,
+        d_state=32,
+        expand=2,
+        d_head=32,
+        d_conv=4,
+        chunk_size=16,
+        residual_in_fp32=True,
+        mlp_multiple_of=32,
+    )
+    block = SLinOSSBlock(config).to(dtype=torch.bfloat16)
+    hidden = torch.randn(2, 4, 64, dtype=torch.bfloat16)
+    out, residual = block(hidden)
+    assert out.dtype == torch.bfloat16
+    assert residual.dtype == torch.float32
+
+
+def test_block_matches_mamba_unfused_residual_algebra(monkeypatch) -> None:
+    class _DummyMixer(nn.Module):
+        def __init__(self, d_model: int, **_: object) -> None:
+            super().__init__()
+            self.proj = nn.Linear(d_model, d_model, bias=False)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.proj(x)
+
+    class _DummyMLP(nn.Module):
+        def __init__(
+            self,
+            in_features: int,
+            *,
+            hidden_features: int,
+            out_features: int | None = None,
+            **_: object,
+        ) -> None:
+            super().__init__()
+            del hidden_features
+            out_features = in_features if out_features is None else out_features
+            self.proj = nn.Linear(in_features, out_features, bias=False)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.proj(x)
+
+    import slinoss_lm.modeling_slinoss_lm as modeling
+
+    monkeypatch.setattr(modeling, "SLinOSSMixer", _DummyMixer)
+    monkeypatch.setattr(modeling, "GatedMLP", _DummyMLP)
+    config = SLinOSSLMConfig(
+        vocab_size=128256,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        d_state=16,
+        expand=2,
+        d_head=16,
+        d_conv=4,
+        chunk_size=16,
+        residual_in_fp32=True,
+    )
+    block = modeling.SLinOSSBlock(config).to(dtype=torch.bfloat16)
+    hidden = torch.randn(2, 4, 32, dtype=torch.bfloat16)
+    carried = torch.randn(2, 4, 32, dtype=torch.bfloat16)
+
+    out, residual = block(hidden, carried)
+
+    expected_residual = hidden + carried
+    normed = block.norm(expected_residual.to(dtype=block.norm.weight.dtype))
+    mixed = block.mixer(normed)
+    expected_residual = (mixed + expected_residual).to(torch.float32)
+    normed2 = block.norm2(expected_residual.to(dtype=block.norm2.weight.dtype))
+    expected_out = block.mlp(normed2)
+
+    assert residual.dtype == torch.float32
+    assert torch.allclose(residual, expected_residual, atol=1.0e-2, rtol=1.0e-2)
+    assert torch.allclose(out, expected_out, atol=1.0e-2, rtol=1.0e-2)
+
+
+def test_optimizer_respects_no_weight_decay_markers() -> None:
+    class _Toy(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = nn.Linear(4, 4, bias=False)
+            self.norm = nn.LayerNorm(4)
+            self.bias_param = nn.Parameter(torch.zeros(4))
+            self.tagged = nn.Parameter(torch.ones(2, 2))
+            setattr(self.tagged, "_no_weight_decay", True)
+
+    cfg = load_config([])
+    toy = _Toy()
+    optimizer = build_optimizer(toy, cfg)
+    decay_group, no_decay_group = optimizer.param_groups
+    decay_ids = {id(param) for param in decay_group["params"]}
+    no_decay_ids = {id(param) for param in no_decay_group["params"]}
+
+    assert id(toy.linear.weight) in decay_ids
+    assert id(toy.norm.weight) in no_decay_ids
+    assert id(toy.bias_param) in no_decay_ids
+    assert id(toy.tagged) in no_decay_ids
