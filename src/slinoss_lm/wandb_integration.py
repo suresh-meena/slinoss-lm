@@ -49,6 +49,38 @@ def _namespace_scalars(
     return out
 
 
+def _dashboard_training_aliases(payload: Mapping[str, Any]) -> dict[str, int | float]:
+    aliases: dict[str, int | float] = {}
+    scalar_aliases = {
+        "loss": "loss",
+        "lr": "lr",
+        "grad_norm": "grad_norm",
+        "tokens_per_second": "toks_per_sec",
+        "step_time_seconds": "step_time_seconds",
+    }
+    for source_key, alias_key in scalar_aliases.items():
+        value = payload.get(source_key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            aliases[alias_key] = value
+    max_mem = payload.get("cuda_max_memory_allocated_bytes")
+    if isinstance(max_mem, (int, float)) and not isinstance(max_mem, bool):
+        aliases["max_memory_gib"] = float(max_mem) / float(1024**3)
+    return aliases
+
+
+def _dashboard_validation_aliases(metrics: Mapping[str, Any]) -> dict[str, int | float]:
+    aliases: dict[str, int | float] = {}
+    scalar_aliases = {
+        "loss": "val_loss",
+        "ppl": "val_ppl",
+    }
+    for source_key, alias_key in scalar_aliases.items():
+        value = metrics.get(source_key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            aliases[alias_key] = value
+    return aliases
+
+
 class WandbLogger:
     def __init__(
         self,
@@ -81,12 +113,16 @@ class WandbLogger:
         if self._run is None:
             return
         step = int(payload["step"])
-        self._log(_namespace_scalars("train", payload), step=step)
+        metrics = _namespace_scalars("train", payload)
+        metrics.update(_dashboard_training_aliases(payload))
+        self._log(metrics, step=step)
 
     def log_validation(self, *, step: int, metrics: dict[str, float]) -> None:
         if self._run is None:
             return
-        self._log(_namespace_scalars("validation", metrics), step=step)
+        payload = _namespace_scalars("validation", metrics)
+        payload.update(_dashboard_validation_aliases(metrics))
+        self._log(payload, step=step)
 
     def log_checkpoint(
         self,
@@ -165,6 +201,14 @@ def build_wandb_logger(
     run.define_metric("train/*", step_metric="step")
     run.define_metric("validation/*", step_metric="step")
     run.define_metric("checkpoint/*", step_metric="step")
+    run.define_metric("loss", step_metric="step")
+    run.define_metric("val_loss", step_metric="step")
+    run.define_metric("val_ppl", step_metric="step")
+    run.define_metric("lr", step_metric="step")
+    run.define_metric("grad_norm", step_metric="step")
+    run.define_metric("toks_per_sec", step_metric="step")
+    run.define_metric("step_time_seconds", step_metric="step")
+    run.define_metric("max_memory_gib", step_metric="step")
 
     metadata = {
         "id": getattr(run, "id", run_id),

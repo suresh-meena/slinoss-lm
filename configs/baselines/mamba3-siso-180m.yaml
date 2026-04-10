@@ -1,0 +1,90 @@
+name: mamba3-siso-180m
+
+model:
+  vocab_size: 128256
+  d_model: 768
+  d_intermediate: 1500
+  n_layer: 11
+  d_state: 128
+  expand: 2
+  headdim: 64
+  chunk_size: 64
+  rms_norm: true
+  residual_in_fp32: true
+  fused_add_norm: true
+  pad_vocab_size_multiple: 8
+  tie_embeddings: true
+  initializer_range: 0.02
+  is_mimo: false
+  mimo_rank: 4
+
+data:
+  root: null
+  root_env: FWEDU_DATA_ROOT
+  dataset_dir: data/fwedu-llama31-2k
+  seq_len: 2048
+  tokenizer_name: meta-llama/Llama-3.1-8B
+  tokenizer_path: null
+
+optim:
+  peak_lr: 6.0e-4
+  min_lr: 1.0e-5
+  warmup_tokens: 1000000000
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  eps: 1.0e-8
+  grad_clip_norm: 1.0
+
+train:
+  seed: 1337
+  target_tokens: 100000000000
+  precision: bf16
+  allow_tf32: true
+  compile: false
+  compile_mode: max-autotune-no-cudagraphs
+
+runtime:
+  per_device_batch_size: 8
+  grad_accum_steps: 32
+  dataloader_workers: 8
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+
+checkpoint:
+  run_root: runs
+  save_every_steps: 5000
+  keep_last: 3
+  save_on_signal: true
+
+logging:
+  log_every_steps: 10
+
+validation:
+  enabled: true
+  dataset_root: null
+  dataset_dir: null
+  start_sequence: -4096
+  num_sequences: 4096
+  batch_size: 2
+  every_steps: 100
+
+wandb:
+  enabled: false
+  project: null
+  entity: null
+  run_name: null
+  run_id: null
+  group: baselines
+  job_type: baseline
+  tags:
+    - baseline
+    - mamba3
+    - siso
+    - 180m
+  notes: null
+  mode: null
+  dir: null
+  resume: allow
+  upload_checkpoints: false

@@ -23,6 +23,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+baselines = [
+  "einops>=0.8,<0.9",
+  "mamba-ssm @ git+https://github.com/state-spaces/mamba@bd6dc62a724e6d2f1c821a15b3b2cc02e2b810b4",
+]
 eval = [
   "lm_eval[hf]>=0.4,<0.5",
   "pyarrow>=21,<23",
@@ -38,6 +42,7 @@ dev = [
 
 [project.scripts]
 slinoss-lm-train = "slinoss_lm.train:main"
+slinoss-lm-baseline-mamba3-train = "slinoss_lm.baselines.mamba3.train:main"
 slinoss-lm-inspect = "slinoss_lm.inspect:main"
 slinoss-lm-eval-ppl = "slinoss_lm.eval_ppl:main"
 slinoss-lm-eval-zero-shot = "slinoss_lm.eval_zero_shot:main"

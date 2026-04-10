@@ -60,6 +60,10 @@ Four parameter-matched SLinOSS runs are configured:
 - `fwedu-880m`: `23` layers, `d_model=1152`, `intermediate_size=3840`
 - `fwedu-1p5b`: `25` layers, `d_model=1536`, `intermediate_size=4096`
 
+One Mamba-3 baseline is also configured:
+
+- `mamba3-siso-180m`: `11` layers, `d_model=768`, `d_intermediate=1500`
+
 Shared mixer defaults:
 
 - `d_state=128`
@@ -92,6 +96,8 @@ Peak LR choices used here:
 
 Those values are fixed per scale and should be held constant across architecture baselines at the same scale.
 
+For Mamba-3 specifically, the paper points back to the earlier Mamba/Mamba-2 recipe tables for optimizer details. The shipped `mamba3-siso-180m` YAML maps to the earlier `125M` row because it keeps the same `d_model=768` backbone width, which yields the paper-derived defaults of `0.5M` tokens per optimizer step and `peak_lr=6e-4`.
+
 ## Install
 
 Use Python `3.11`.
@@ -119,6 +125,13 @@ source .venv/bin/activate
 pip install -r requirements-wandb.txt
 ```
 
+For the Mamba-3 baseline, install the optional baseline stack from source as recommended by the upstream `state-spaces/mamba` repo:
+
+```bash
+source .venv/bin/activate
+MAMBA_FORCE_BUILD=TRUE pip install --no-build-isolation -e .[baselines]
+```
+
 ## Inspect Before Launching
 
 Use the inspector to verify the resolved config, parameter count, and batch geometry.
@@ -140,6 +153,15 @@ source .venv/bin/activate
 export FWEDU_DATA_ROOT=/path/to/fwedu-data
 torchrun --standalone --nproc-per-node=2 train.py \
   --config configs/experiments/fwedu-180m.yaml
+```
+
+Mamba-3 baseline launch:
+
+```bash
+source .venv/bin/activate
+export FWEDU_DATA_ROOT=/path/to/fwedu-data
+torchrun --standalone --nproc-per-node=1 -m slinoss_lm.baselines.mamba3.train \
+  --config configs/baselines/mamba3-siso-180m.yaml
 ```
 
 If you need host-specific batch geometry, keep that in an untracked local config and pass it as an additional `--config`.

@@ -169,8 +169,13 @@ def build_eval_loader(
     num_workers: int = 0,
 ) -> DataLoader[Batch]:
     dataset = PackedSequenceDataset(meta)
-    stop = min(start_sequence + num_sequences, meta.n_sequences)
-    indices = list(range(start_sequence, stop))
+    start = (
+        max(meta.n_sequences + start_sequence, 0)
+        if start_sequence < 0
+        else start_sequence
+    )
+    stop = min(start + num_sequences, meta.n_sequences)
+    indices = list(range(start, stop))
 
     class _SubsetBatchSampler(Sampler[list[int]]):
         def __iter__(self) -> Iterator[list[int]]:
