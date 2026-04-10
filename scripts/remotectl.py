@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = ROOT / ".env"
 GUIX_RUN = ROOT / "scripts" / "guix-run"
 KNOWN_HOSTS_FILE = ROOT / ".remote-known-hosts"
+ENV_PREFIX = "SLINOSS_LM_REMOTE"
+LEGACY_ENV_PREFIX = "KD_REMOTE"
 
 
 class RemoteConfigError(RuntimeError):
@@ -70,7 +72,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 def load_remote_env(path: Path) -> dict[str, str]:
     values = parse_env_file(path)
     for key, value in os.environ.items():
-        if key.startswith("KD_REMOTE_"):
+        if key.startswith(f"{ENV_PREFIX}_") or key.startswith(f"{LEGACY_ENV_PREFIX}_"):
             values[key] = value
     return values
 
@@ -80,24 +82,34 @@ def normalize_machine_name(name: str) -> str:
 
 
 def configured_machine_names(env: dict[str, str]) -> list[str]:
-    configured = env.get("KD_REMOTE_MACHINES", "")
+    configured = env.get(f"{ENV_PREFIX}_MACHINES", "") or env.get(
+        f"{LEGACY_ENV_PREFIX}_MACHINES", ""
+    )
     if configured:
         return [item.strip() for item in configured.split(",") if item.strip()]
 
     return [
-        key[len("KD_REMOTE_") : -len("_HOST")].lower()
+        key[len(f"{ENV_PREFIX}_") : -len("_HOST")].lower()
         for key in sorted(env)
-        if key.startswith("KD_REMOTE_") and key.endswith("_HOST")
+        if key.startswith(f"{ENV_PREFIX}_") and key.endswith("_HOST")
+    ] or [
+        key[len(f"{LEGACY_ENV_PREFIX}_") : -len("_HOST")].lower()
+        for key in sorted(env)
+        if key.startswith(f"{LEGACY_ENV_PREFIX}_") and key.endswith("_HOST")
     ]
 
 
 def resolve_machine_name(env: dict[str, str], requested: str | None) -> str:
     if requested:
         return requested
-    if env.get("KD_REMOTE_MACHINE"):
-        return env["KD_REMOTE_MACHINE"]
-    if env.get("KD_REMOTE_DEFAULT_MACHINE"):
-        return env["KD_REMOTE_DEFAULT_MACHINE"]
+    if env.get(f"{ENV_PREFIX}_MACHINE"):
+        return env[f"{ENV_PREFIX}_MACHINE"]
+    if env.get(f"{LEGACY_ENV_PREFIX}_MACHINE"):
+        return env[f"{LEGACY_ENV_PREFIX}_MACHINE"]
+    if env.get(f"{ENV_PREFIX}_DEFAULT_MACHINE"):
+        return env[f"{ENV_PREFIX}_DEFAULT_MACHINE"]
+    if env.get(f"{LEGACY_ENV_PREFIX}_DEFAULT_MACHINE"):
+        return env[f"{LEGACY_ENV_PREFIX}_DEFAULT_MACHINE"]
 
     names = configured_machine_names(env)
     if len(names) == 1:
@@ -110,7 +122,10 @@ def resolve_machine_name(env: dict[str, str], requested: str | None) -> str:
 
 
 def machine_field(env: dict[str, str], machine: str, field: str) -> str | None:
-    return env.get(f"KD_REMOTE_{normalize_machine_name(machine)}_{field}")
+    normalized = normalize_machine_name(machine)
+    return env.get(f"{ENV_PREFIX}_{normalized}_{field}") or env.get(
+        f"{LEGACY_ENV_PREFIX}_{normalized}_{field}"
+    )
 
 
 def require_machine_field(env: dict[str, str], machine: str, field: str) -> str:
@@ -215,7 +230,7 @@ def ssh_command(
         command.append("-t")
     command += [
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=no",
         "-o",
         "VisualHostKey=no",
         "-o",
@@ -239,7 +254,7 @@ def rsync_ssh_transport(machine: RemoteMachine) -> str:
     parts += [
         "ssh",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=no",
         "-o",
         "VisualHostKey=no",
         "-o",
@@ -429,7 +444,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=Path(os.environ.get("KD_REMOTE_ENV_FILE", DEFAULT_ENV_FILE)),
+        default=Path(
+            os.environ.get(
+                f"{ENV_PREFIX}_ENV_FILE",
+                os.environ.get(f"{LEGACY_ENV_PREFIX}_ENV_FILE", DEFAULT_ENV_FILE),
+            )
+        ),
         help="Path to the machine env file",
     )
 
